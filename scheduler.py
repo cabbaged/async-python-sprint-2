@@ -1,85 +1,70 @@
-import datetime
-from threading import Thread, Event
+import logging
+import pickle
 import time
-from task_state import TaskState
-from job import Job, create_network_job
-from pathlib import Path
-DATA_PATH = Path(__file__).parent / 'artifacts'
+from pprint import pformat
+from threading import Event, Thread
+
+from constants import DATA_PATH, TaskCommand, TaskState
 
 
 class Scheduler(Thread):
     def __init__(self, pool_size=10):
         super().__init__()
-        self.active_tasks = []
+        self.active_tasks = {}
+        self.pool_size = pool_size
         self.stop_event = Event()
-        self.wrap_up_event = Event()
+        self.dump_event = Event()
 
-    def schedule(self, task):
-        job = task.run()
-        self.active_tasks.append(job)
+    def schedule(self, task, initial_status=None):
+        job = task.run(initial_status)
+        if len(self.active_tasks) > self.pool_size:
+            raise Exception('Pool size exceeded')
+        self.active_tasks[task.name] = job
+        self.logger.info(f'scheduled {task}')
 
     def run(self):
+        self.logger.info('run')
         while not self.stop_event.is_set():
-            for task in self.active_tasks:
+            for name, task in list(self.active_tasks.items()):
                 try:
                     status = next(task)
                     if status == TaskState.FINISH:
-                        task.send("HOORAY")
-                        self.active_tasks.remove(task)
+                        self.active_tasks.pop(name)
                 except StopIteration:
                     pass
-        print('wrap up event up')
-        self.wrap_up_event.set()
-        print(self.wrap_up_event.is_set())
-
-    def restart(self):
-        pass
+            if not self.active_tasks:
+                break
+            time.sleep(0.1)
+        self.logger.info('setting dumping event')
+        self.dump_event.set()
 
     def stop(self):
+        self.logger.info('setting stop event')
         self.stop_event.set()
-        while not self.wrap_up_event.is_set():
-            print('here')
+        while not self.dump_event.is_set():
             time.sleep(0.1)
-        for task in self.active_tasks:
-            print(len(self.active_tasks))
-            self.send_wrap_up(task)
-
-    def send_wrap_up(self, task):
-        try:
-            print(f'sending wrap up command to {task}')
-            task.send('wrap up')
-            print('wrap up command sent')
-        except StopIteration:
-            print(f'task {task} already finished')
+        for name, task in self.active_tasks.items():
+            self.logger.info(f'sending dump command to {name}')
+            self.send_dump_command(task)
 
     def restore_jobs(self):
         jobs = []
         for dir in DATA_PATH.rglob('*'):
             if dir.name == 'picled':
                 with dir.open('rb') as f:
-                    import pickle
-
                     jobs.append(pickle.load(f))
-        print(jobs)
+        self.logger.info('jobs statuses')
         for job in jobs:
-            from pprint import pprint
-            pprint(vars(job))
+            self.logger.info(pformat(vars(job)))
+            self.schedule(job, job.status)
+        self.run()
 
+    def send_dump_command(self, task):
+        try:
+            task.send(TaskCommand.DUMP)
+        except StopIteration:
+            self.logger.info('task already finished')
 
-# if __name__ == '__main__':
-#     scheduler = Scheduler()
-#     scheduler.restore_jobs()
-
-
-#
-if __name__ == '__main__':
-    job1 = create_network_job('http://google.com', restarts=1, start_at = datetime.datetime.now() + datetime.timedelta(seconds=2))
-    job2 = create_network_job('yandex.ru', restarts=1, dependencies=[job1.name])
-    job3 = create_network_job('http://google.com', restarts=1)
-    scheduler = Scheduler()
-    scheduler.schedule(job1)
-    scheduler.schedule(job2)
-    scheduler.schedule(job3)
-    scheduler.start()
-    time.sleep(2)
-    scheduler.stop()
+    @property
+    def logger(self):
+        return logging.getLogger('Scheduler')
