@@ -1,0 +1,2 @@
+1. initial_run.py -- прогон scheduler'a с нуля
+2. recovery_run.py -- прогон scheduler'a после initial_run с восстановлением тасок из дампов

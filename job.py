@@ -1,133 +1,124 @@
+import abc
 import datetime
-import requests
+import logging
+import pickle
+import random
+import time
 from pathlib import Path
-from threading import Thread
-from functools import partial
-from task_state import TaskState
+from typing import Optional
 
-DATA_PATH = Path(__file__).parent / 'artifacts'
-
-
-def create_dir(dir):
-    dir.mkdir(parents=True, exist_ok=True)
-
-
-def is_job_finished(job_name):
-    lock_file = DATA_PATH / job_name / '.lock'
-    if lock_file.exists():
-        return lock_file.read_text() == 'running'
-    else:
-        return False
-
-
-def create_job_lock(job_name):
-    lock_file = DATA_PATH / job_name / '.lock'
-    return lock_file.exists()
-
-
-def finalize_job_lock(job_name):
-    lock_file = DATA_PATH / job_name / '.lock'
-    lock_file.write_text('True')
-
-
-def dump_data(file: Path, data):
-    output_file = DATA_PATH / file
-    output_file.write_text(data)
-
-
-import uuid
-
-
-def download(url):
-    result = requests.get(url)
-    dump_data(DATA_PATH / str(uuid.uuid4()), result.content.decode())
+from constants import DATA_PATH, TaskCommand, TaskState
+from lock_manager import LockManager
 
 
 def get_file_size(path):
     return Path(path).stat().st_size
 
 
-def create_network_job(url, **kwargs):
-    return Job(target=partial(download, url), **kwargs)
-
-
 class Job:
-    def __init__(self, target, start_at="", max_working_time=-1, restarts=0, dependencies=[]):
+    def __init__(self, start_at="", max_working_time=datetime.timedelta(),
+                 restarts=0, dependencies=[], target_kwargs={}):
         self.start_at = start_at or datetime.datetime.now()
         self.max_working_time = max_working_time
         self.restarts = restarts
         self.dependencies = dependencies
         self.tries = 0
-        self.target = target
-        self.name = str(uuid.uuid4())
+        self.target_kwargs = target_kwargs
+        self.name = 'Job ' + str(random.randint(1, 1000))
+        self.initial_status = None
 
-    def run(self):
+    def __str__(self):
+        return f'{self.name}'
+
+    def run(self, initial_status: Optional[TaskState] = None):
+        self.initial_status = initial_status
         self._create_job_lock()
-        print(f'Run job {self}')
-        while self.dependencies:
-            for dep in self.dependencies:
-                if self.is_job_finished(dep):
-                    self.dependencies.remove(dep)
-            if self.dependencies:
-                yield from self._send_status_and_gather_commands(TaskState.WAIT_DEPENDCIES)
+        yield from self._wait_dependencies()
+        yield from self._wait_start_time()
+        yield from self._run_target_job()
+        yield from self._finish_job()
 
-        while datetime.datetime.now() < self.start_at:
-            yield from self._send_status_and_gather_commands(TaskState.WAIT_STARTTIME)
-
-        while True:
-            try:
-                self.target()
-                break
-            except Exception as err:
-                print(f'error {self}')
-                print(err)
-                self.restarts -= 1
-                if self.restarts < 0:
-                    yield from self._send_status_and_gather_commands(TaskState.FINISH)
-                else:
-                    self._dump_self()
-                    yield from self._send_status_and_gather_commands(TaskState.ERROR)
-
-        self._finalize_job_lock()
-        self._dump_self()
-        print(f'job finished {self}')
-
-
-
-    def pause(self):
-        pass
-
-    def stop(self):
+    @abc.abstractmethod
+    def target(self, **kwargs):
         pass
 
     def _create_job_lock(self):
-        lock_dir = DATA_PATH / self.name
-        create_dir(lock_dir)
-        lock_file = lock_dir / '.lock'
-        lock_file.write_text('running')
+        self.logger.info('creating lock')
+        LockManager.create_lock(self.name)
 
     def _finalize_job_lock(self):
-        lock_dir = DATA_PATH / self.name
-        create_dir(lock_dir)
-        lock_file = lock_dir / '.lock'
-        lock_file.write_text('finished')
+        self.logger.info('removing lock')
+        LockManager.finalize_lock(self.name)
 
-    def _send_status_and_gather_commands(self, status):
+    def _finish_job(self):
+        self._finalize_job_lock()
+        self.logger.info('finished')
+        yield from self._communicate(TaskState.FINISH)
+
+    def _communicate(self, status: TaskState):
         self.status = status
+        self.logger.info(f'sending status {status}')
         command = yield status
-        if command == 'wrap up':
+        if command == TaskCommand.DUMP:
+            self.logger.info(f"recieved {command}")
             self._dump_self()
+            yield
 
     def _dump_self(self):
-        import pickle
         path = DATA_PATH / self.name / 'picled'
         path.touch()
         with path.open('wb') as f:
             pickle.dump(self, f)
+        from pprint import pformat
+        self.logger.info(f"dumped {pformat(vars(self))}")
 
-    def is_job_finished(self, job_name):
-        lock_file = DATA_PATH / job_name / '.lock'
-        if lock_file.exists():
-            return lock_file.read_text() == 'finished'
-        else:
-            return False
+    def _wait_dependencies(self):
+        if self.initial_status and self.initial_status != TaskState.WAIT_DEPENDENCIES:
+            self.logger.info("skipping wait dependencies step")
+            return
+        self.logger.info("waiting for dependencies")
+        while self.dependencies:
+            for dep in self.dependencies:
+                if LockManager.is_finished(dep):
+                    self.dependencies.remove(dep)
+            if self.dependencies:
+                yield from self._communicate(TaskState.WAIT_DEPENDENCIES)
+        self.logger.info("all dependencies are complete")
+
+    def _wait_start_time(self):
+        if self.initial_status and self.initial_status != TaskState.WAIT_STARTTIME:
+            self.logger.info("skipping wait starttime step")
+            return
+        self.logger.info("waiting starttime")
+        while datetime.datetime.now() < self.start_at:
+            time.sleep(0.1)
+            yield from self._communicate(TaskState.WAIT_STARTTIME)
+        self.logger.info("starttime reached")
+
+    def _run_target_job(self):
+        self.logger.info(f'run target {self.__class__.__name__}')
+        self.job_start = datetime.datetime.now()
+        while True:
+            try:
+                self.target(**self.target_kwargs)
+                break
+            except Exception as err:
+                self.logger.info(f'error {self}')
+                self.logger.info(err)
+                self.restarts -= 1
+                if self.restarts < 0:
+                    self.logger.info("run target: restarts exceeded")
+                    yield from self._finish_job()
+                else:
+                    self.logger.info("run target: attempt failure")
+                    yield from self._finish_job()
+
+        if self.max_working_time and datetime.datetime.now() - self.job_start > self.max_working_time:
+            self.logger.info("run target: max working time exceeded")
+            yield from self._communicate(TaskState.FINISH)
+
+        self.logger.info("run target: success")
+
+    @property
+    def logger(self):
+        return logging.getLogger(self.name)
