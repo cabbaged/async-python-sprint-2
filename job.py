@@ -16,7 +16,7 @@ def get_file_size(path):
 
 
 class Job:
-    def __init__(self, start_at="", max_working_time=datetime.timedelta(),
+    def __init__(self, start_at='', max_working_time=datetime.timedelta(),
                  restarts=0, dependencies=[], target_kwargs={}):
         self.start_at = start_at or datetime.datetime.now()
         self.max_working_time = max_working_time
@@ -60,7 +60,7 @@ class Job:
         self.logger.info(f'sending status {status}')
         command = yield status
         if command == TaskCommand.DUMP:
-            self.logger.info(f"recieved {command}")
+            self.logger.info(f'recieved {command}')
             self._dump_self()
             yield
 
@@ -70,30 +70,30 @@ class Job:
         with path.open('wb') as f:
             pickle.dump(self, f)
         from pprint import pformat
-        self.logger.info(f"dumped {pformat(vars(self))}")
+        self.logger.info(f'dumped {pformat(vars(self))}')
 
     def _wait_dependencies(self):
         if self.initial_status and self.initial_status != TaskState.WAIT_DEPENDENCIES:
-            self.logger.info("skipping wait dependencies step")
+            self.logger.info('skipping wait dependencies step')
             return
-        self.logger.info("waiting for dependencies")
+        self.logger.info('waiting for dependencies')
         while self.dependencies:
             for dep in self.dependencies:
                 if LockManager.is_finished(dep):
                     self.dependencies.remove(dep)
             if self.dependencies:
                 yield from self._communicate(TaskState.WAIT_DEPENDENCIES)
-        self.logger.info("all dependencies are complete")
+        self.logger.info('all dependencies are complete')
 
     def _wait_start_time(self):
         if self.initial_status and self.initial_status != TaskState.WAIT_STARTTIME:
-            self.logger.info("skipping wait starttime step")
+            self.logger.info('skipping wait starttime step')
             return
-        self.logger.info("waiting starttime")
+        self.logger.info('waiting starttime')
         while datetime.datetime.now() < self.start_at:
             time.sleep(0.1)
             yield from self._communicate(TaskState.WAIT_STARTTIME)
-        self.logger.info("starttime reached")
+        self.logger.info('starttime reached')
 
     def _run_target_job(self):
         self.logger.info(f'run target {self.__class__.__name__}')
@@ -107,17 +107,17 @@ class Job:
                 self.logger.info(err)
                 self.restarts -= 1
                 if self.restarts < 0:
-                    self.logger.info("run target: restarts exceeded")
+                    self.logger.info('run target: restarts exceeded')
                     yield from self._finish_job()
                 else:
-                    self.logger.info("run target: attempt failure")
+                    self.logger.info('run target: attempt failure')
                     yield from self._finish_job()
 
         if self.max_working_time and datetime.datetime.now() - self.job_start > self.max_working_time:
-            self.logger.info("run target: max working time exceeded")
+            self.logger.info('run target: max working time exceeded')
             yield from self._communicate(TaskState.FINISH)
 
-        self.logger.info("run target: success")
+        self.logger.info('run target: success')
 
     @property
     def logger(self):

@@ -20,10 +20,10 @@ class Scheduler(Thread):
         if len(self.active_tasks) > self.pool_size:
             raise Exception('Pool size exceeded')
         self.active_tasks[task.name] = job
-        self.logger.info(f"scheduled {task}")
+        self.logger.info(f'scheduled {task}')
 
     def run(self):
-        self.logger.info("run")
+        self.logger.info('run')
         while not self.stop_event.is_set():
             for name, task in list(self.active_tasks.items()):
                 try:
@@ -35,11 +35,11 @@ class Scheduler(Thread):
             if not self.active_tasks:
                 break
             time.sleep(0.1)
-        self.logger.info("setting dumping event")
+        self.logger.info('setting dumping event')
         self.dump_event.set()
 
     def stop(self):
-        self.logger.info("setting stop event")
+        self.logger.info('setting stop event')
         self.stop_event.set()
         while not self.dump_event.is_set():
             time.sleep(0.1)
