@@ -3,19 +3,21 @@ import pickle
 import time
 from pprint import pformat
 from threading import Event, Thread
+from typing import Dict, Generator, Optional
 
 from constants import DATA_PATH, TaskCommand, TaskState
+from job import Job
 
 
 class Scheduler(Thread):
-    def __init__(self, pool_size=10):
+    def __init__(self, pool_size: int = 10):
         super().__init__()
-        self.active_tasks = {}
+        self.active_tasks: Dict[str, Generator] = {}
         self.pool_size = pool_size
         self.stop_event = Event()
         self.dump_event = Event()
 
-    def schedule(self, task, initial_status=None):
+    def schedule(self, task: Job, initial_status: Optional[TaskState] = None):
         job = task.run(initial_status)
         if len(self.active_tasks) > self.pool_size:
             raise Exception('Pool size exceeded')
@@ -59,7 +61,7 @@ class Scheduler(Thread):
             self.schedule(job, job.status)
         self.run()
 
-    def send_dump_command(self, task):
+    def send_dump_command(self, task: Generator):
         try:
             task.send(TaskCommand.DUMP)
         except StopIteration:

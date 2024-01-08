@@ -5,7 +5,8 @@ import pickle
 import random
 import time
 from pathlib import Path
-from typing import Optional
+from pprint import pformat
+from typing import Dict, List, Optional
 
 from constants import DATA_PATH, TaskCommand, TaskState
 from lock_manager import LockManager
@@ -16,14 +17,15 @@ def get_file_size(path):
 
 
 class Job:
-    def __init__(self, start_at='', max_working_time=datetime.timedelta(),
-                 restarts=0, dependencies=[], target_kwargs={}):
+    def __init__(self, start_at: Optional[datetime.datetime] = None,
+                 max_working_time: datetime.timedelta = datetime.timedelta(),
+                 restarts: int = 0, dependencies: Optional[List] = None, target_kwargs: Optional[Dict] = None):
         self.start_at = start_at or datetime.datetime.now()
         self.max_working_time = max_working_time
         self.restarts = restarts
-        self.dependencies = dependencies
+        self.dependencies = dependencies or []
         self.tries = 0
-        self.target_kwargs = target_kwargs
+        self.target_kwargs = target_kwargs or {}
         self.name = 'Job ' + str(random.randint(1, 1000))
         self.initial_status = None
 
@@ -69,7 +71,6 @@ class Job:
         path.touch()
         with path.open('wb') as f:
             pickle.dump(self, f)
-        from pprint import pformat
         self.logger.info(f'dumped {pformat(vars(self))}')
 
     def _wait_dependencies(self):
