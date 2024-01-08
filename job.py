@@ -17,7 +17,8 @@ def get_file_size(path):
 
 
 class Job:
-    def __init__(self, start_at: Optional[datetime.datetime] = None, max_working_time: datetime.timedelta = datetime.timedelta(),
+    def __init__(self, start_at: Optional[datetime.datetime] = None,
+                 max_working_time: datetime.timedelta = datetime.timedelta(),
                  restarts: int = 0, dependencies: Optional[List] = None, target_kwargs: Optional[Dict] = None):
         self.start_at = start_at or datetime.datetime.now()
         self.max_working_time = max_working_time
